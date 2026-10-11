@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include "planodia_core.h"
 #ifdef PL_OPENCL
 #include "planodia_opencl.h"
@@ -11,6 +12,11 @@
 int main(int argc, char **argv) {
     bool timing = false, use_gpu = false;
     pl::Params P;
+    // experiment overrides (not used by the apps): PL_FLATTEN days, PL_FF frequency factor, PL_BINW days, PL_DURS "d1,d2,d3,d4"
+    if (const char *e = std::getenv("PL_FLATTEN")) P.flatten_days = std::atof(e);
+    if (const char *e = std::getenv("PL_FF")) P.freq_factor = std::atof(e);
+    if (const char *e = std::getenv("PL_BINW")) P.binw = std::atof(e);
+    if (const char *e = std::getenv("PL_DURS")) std::sscanf(e, "%lf,%lf,%lf,%lf", &P.durs[0], &P.durs[1], &P.durs[2], &P.durs[3]);
     long done = 0;
     double scan_s = 0, fin_s = 0, prep_s = 0;
     for (int a = 1; a < argc; a++) {
