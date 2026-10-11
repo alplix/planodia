@@ -13,3 +13,11 @@ transiting planets. Part of the bitboinc volunteer-computing network (https://bi
 Measured on 240 sector-26 light curves (40 of them known TOIs): the C++ search finds 28/40 known planets in its top three
 peaks (15/16 with transit depth above 0.6 %), 3 of 200 random stars exceed SDE 9; about 0.08 s per light curve on one CPU
 core, 4 ms on an RTX 5070 Ti.
+
+## Multi-planet search (Planodia Deep)
+
+Input format 2 adds a third line (`binw ndur dur_1..dur_ndur max_periods passes floor_win`). With `passes` > 1 the transits of the
+strongest peak are masked and the scan repeated; the first pass reports its strongest peaks and the SDE, every later pass adds its
+single strongest peak. On 80 sector-26 light curves with two injected planets (the second one half as deep) this recovers the second
+planet in 22 instead of 10 cases at the cost of three scans per light curve, which is what the GPU builds are for (about 0.1-0.2 s per
+light curve on an RTX 5070 Ti). A finer period grid or finer phase bins did not find more planets: they only raise the false-alarm rate.

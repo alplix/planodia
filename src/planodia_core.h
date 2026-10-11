@@ -23,13 +23,17 @@
 
 namespace pl {
 
+#define PL_MAXDUR 8
+
 struct Params {
     double pmin = 0.5, pmax = 14.0, freq_factor = 1.5, flatten_days = 1.0;
     double binw = 0.02;                       // phase bin width in days
-    int ndur = 4;
-    double durs[4] = {0.04, 0.08, 0.16, 0.30};
+    int ndur = 4;                             // up to PL_MAXDUR box durations (days), increasing
+    double durs[8] = {0.04, 0.08, 0.16, 0.30, 0, 0, 0, 0};
     int topn = 5;
     int max_periods = 80000;
+    int passes = 1;                           // >1: after a pass the transits of its best peak are masked and the search repeated (more planets)
+    int floor_win = 301;                      // periods in the running median that defines the noise floor (odd); scales with 1/freq_factor
 };
 
 // the prepared light curve
@@ -213,7 +217,7 @@ inline Result finish(const Prep &p, const Params &P, const std::vector<double> &
     r.npts = (int)p.t.size();
     size_t np = periods.size();
     std::vector<double> d;
-    floor_subtract(o.power, d);
+    floor_subtract(o.power, d, P.floor_win);
     double mean = 0;
     for (double v : d) mean += v;
     mean /= (double)np;
@@ -267,6 +271,46 @@ inline Result finish(const Prep &p, const Params &P, const std::vector<double> &
         r.peaks.push_back(pk);
     }
     return r;
+}
+
+// Multi-planet search (passes > 1): scan, take the strongest peak, mask its transits, scan again. The first pass reports
+// its P.topn strongest peaks and the SDE; every later pass adds its single strongest peak (when its own SDE is at least
+// 5), so a result line still has at most five peaks. scan(prep, periods, ScanOut&) -> bool is the CPU or GPU backend.
+inline void mask_transits(Prep &p, const Peak &pk, const Params &P) {
+    double per = pk.period, tc = pk.tc - (double)p.t0, half = 0.75 * pk.dur + P.binw;
+    std::vector<double> t2, y2;
+    for (size_t i = 0; i < p.t.size(); i++) {
+        double x = std::fmod(p.t[i] - tc, per);
+        if (x < 0) x += per;
+        double d = std::min(x, per - x);
+        if (d > half) { t2.push_back(p.t[i]); y2.push_back(p.y[i]); }
+    }
+    p.t.swap(t2);
+    p.y.swap(y2);
+    std::vector<double> tmp = p.y;
+    if (tmp.size() < 200) return;
+    double med = median_of(tmp);
+    for (size_t i = 0; i < tmp.size(); i++) tmp[i] = std::fabs(p.y[i] - med);
+    double s = 1.4826 * median_of(tmp);
+    if (s > 0) p.sigma = s;
+}
+
+template <class Scan>
+inline bool search_passes(const Prep &p0, const Params &P, Scan scan, Result &res) {
+    std::vector<double> periods;
+    make_periods(p0, P, periods);
+    Prep p = p0;
+    for (int pass = 0; pass < P.passes; pass++) {
+        ScanOut so;
+        if (!scan(p, periods, so)) return false;
+        Result r = finish(p, P, periods, so);
+        if (pass == 0) res = r;
+        else if (r.sde >= 5 && !r.peaks.empty() && (int)res.peaks.size() < 5) res.peaks.push_back(r.peaks[0]);
+        if (r.peaks.empty() || pass + 1 >= P.passes) break;
+        mask_transits(p, r.peaks[0], P);
+        if (p.t.size() < 200) break;
+    }
+    return true;
 }
 
 // one text line per light curve:  tic tmag npts sde npeaks  then per peak: period dur depth_ppm snr tc ntr

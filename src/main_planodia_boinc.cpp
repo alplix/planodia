@@ -1,12 +1,16 @@
 // Planodia (transit search in TESS light curves) as a BOINC application, CPU backend.
 //
 // Work unit files:
-//   in      one text file:  line 1 "planodia 1"
+//   in      one text file:  line 1 "planodia 1" or "planodia 2"
 //                           line 2 "<pmin> <pmax> <freq_factor> <flatten_days> <nshards>"
+//                           line 3 (format 2 only, the finer "deep" search):
+//                                  "<binw> <ndur> <dur_1> ... <dur_ndur> <max_periods> <passes> <floor_win>"
+//                                  (days; ndur <= 8; passes 1..4 = multi-planet search, see planodia_core.h)
 //   shard0 .. shard<nshards-1>   light-curve shards (skt.h), a few hundred light curves each
 // Result file "out": a header line "# planodia 1 <nlc> light curves" then one line per light curve
 // (planodia_core.h format_result). One line per light curve is written and flushed as soon as it is done; the
 // checkpoint is the number of finished light curves, so a restart resumes exactly where it stopped.
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -91,15 +95,6 @@ int main(int argc, char **argv) {
     int rc = boinc_init_options(&options);
     if (rc) { fprintf(stderr, "boinc_init_options failed: %d\n", rc); return rc; }
 
-#ifdef PL_OPENCL
-    {
-        std::string err;
-        if (!pl::gpu_init(device_id, &err)) { fprintf(stderr, "no usable GPU: %s\n", err.c_str()); boinc_finish(1); return 1; }
-        fprintf(stderr, "planodia_opencl: using OpenCL device \"%s\"\n", pl::gpu_device_name());
-    }
-#else
-    (void)device_id;
-#endif
     char path[512];
     if (boinc_resolve_filename("in", path, sizeof(path))) { fprintf(stderr, "can't resolve input file 'in'\n"); boinc_finish(1); return 1; }
     FILE *fin = boinc_fopen(path, "r");
@@ -107,15 +102,37 @@ int main(int argc, char **argv) {
     char magic[32];
     int version = 0, nshards = 0;
     pl::Params P;
-    if (fscanf(fin, "%31s %d", magic, &version) != 2 || strcmp(magic, "planodia") != 0 || version != 1 ||
-        fscanf(fin, "%lf %lf %lf %lf %d", &P.pmin, &P.pmax, &P.freq_factor, &P.flatten_days, &nshards) != 5 ||
-        nshards < 1 || nshards > 64 || !(P.pmin > 0.1) || !(P.pmax > P.pmin) || !(P.pmax <= 60) || !(P.flatten_days >= 0.2)) {
+    bool ok = fscanf(fin, "%31s %d", magic, &version) == 2 && strcmp(magic, "planodia") == 0 && (version == 1 || version == 2) &&
+              fscanf(fin, "%lf %lf %lf %lf %d", &P.pmin, &P.pmax, &P.freq_factor, &P.flatten_days, &nshards) == 5 &&
+              nshards >= 1 && nshards <= 64 && P.pmin > 0.1 && P.pmax > P.pmin && P.pmax <= 60 && P.flatten_days >= 0.2 && P.freq_factor >= 0.05;
+    if (ok && version == 2) {
+        int nd = 0;
+        ok = fscanf(fin, "%lf %d", &P.binw, &nd) == 2 && P.binw >= 0.001 && P.binw <= 0.1 && nd >= 1 && nd <= PL_MAXDUR;
+        for (int j = 0; ok && j < nd; j++)
+            ok = fscanf(fin, "%lf", &P.durs[j]) == 1 && P.durs[j] >= P.binw && P.durs[j] <= 1.0 && (j == 0 || P.durs[j] > P.durs[j - 1]);
+        if (ok) {
+            P.ndur = nd;
+            ok = fscanf(fin, "%d %d %d", &P.max_periods, &P.passes, &P.floor_win) == 3 && P.max_periods >= 1000 && P.max_periods <= 400000 &&
+                 P.passes >= 1 && P.passes <= 4 && P.floor_win >= 101 && P.floor_win <= 2001 && (P.floor_win & 1);
+            if (ok && P.passes > 1) P.topn = 5 - (P.passes - 1) > 1 ? 5 - (P.passes - 1) : 1;
+        }
+    }
+    if (!ok) {
         fprintf(stderr, "malformed input file\n");
         fclose(fin);
         boinc_finish(1);
         return 1;
     }
     fclose(fin);
+#ifdef PL_OPENCL
+    {
+        std::string err;
+        if (!pl::gpu_init(device_id, (int)std::ceil(P.pmax / P.binw), &err)) { fprintf(stderr, "no usable GPU: %s\n", err.c_str()); boinc_finish(1); return 1; }
+        fprintf(stderr, "planodia_opencl: using OpenCL device \"%s\"\n", pl::gpu_device_name());
+    }
+#else
+    (void)device_id;
+#endif
 
     // total number of light curves, for progress and for the header
     std::vector<std::string> shard_paths;
@@ -158,15 +175,17 @@ int main(int argc, char **argv) {
             if (!pl::prepare(lc, P, pr)) {
                 line = pl::format_skipped(lc.tic);
             } else {
-                std::vector<double> periods;
-                pl::make_periods(pr, P, periods);
-                pl::ScanOut so;
+                pl::Result res;
+                auto scan = [&P](const pl::Prep &q, const std::vector<double> &per, pl::ScanOut &so) {
 #ifdef PL_OPENCL
-                if (!pl::gpu_scan(pr, P, periods, so)) { fprintf(stderr, "GPU scan failed\n"); fclose(fout); boinc_finish(1); return 1; }
+                    return pl::gpu_scan(q, P, per, so);
 #else
-                pl::scan_cpu(pr, P, periods, so);
+                    pl::scan_cpu(q, P, per, so);
+                    return true;
 #endif
-                line = pl::format_result(pl::finish(pr, P, periods, so));
+                };
+                if (!pl::search_passes(pr, P, scan, res)) { fprintf(stderr, "GPU scan failed\n"); fclose(fout); boinc_finish(1); return 1; }
+                line = pl::format_result(res);
             }
             fprintf(fout, "%s\n", line.c_str());
             fflush(fout);

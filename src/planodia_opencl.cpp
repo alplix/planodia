@@ -20,15 +20,13 @@ namespace pl {
 // A flux of up to +-0.5 and 12000 points stays far below 2^31 in this scale; the quantisation (1.5e-5) is well below
 // the photometric noise. The best box per period is found by a parallel scan over the start bins and a reduction that
 // breaks ties exactly like scan_cpu (lowest duration, then lowest start bin).
-#define PL_MAXBINS 1024
 static const char *kSource = R"CLC(
-#define MAXB 1024
 #define WG 64
 #define SCALE 65536.0f
 __kernel __attribute__((reqd_work_group_size(64, 1, 1)))
 void bls_scan(__global const float *tt, __global const float *y, const int n,
               __global const float *periods, const float binw, const float sigma, const int ndur,
-              const int m0, const int m1, const int m2, const int m3,
+              __global const int *ms,
               __global float *outp, __global int *outj, __global int *outb)
 {
     __local int cnt[MAXB];
@@ -62,7 +60,7 @@ void bls_scan(__global const float *tt, __global const float *y, const int n,
     float best = 0.0f;
     int bestj = 0, bestb = 0;
     for (int j = 0; j < ndur; j++) {
-        int m = (j == 0) ? m0 : (j == 1) ? m1 : (j == 2) ? m2 : m3;
+        int m = ms[j];
         for (int b = lid; b < nb; b += WG) {
             int e = b + m - 1;
             int c0 = b > 0 ? cnt[b - 1] : 0, s0 = b > 0 ? sum[b - 1] : 0;
@@ -98,14 +96,15 @@ static cl_program g_prog = NULL;
 static cl_kernel g_kernel = NULL;
 static cl_device_id g_dev = NULL;
 static char g_name[256] = "";
-static cl_mem g_tt = NULL, g_y = NULL, g_per = NULL, g_op = NULL, g_oj = NULL, g_ob = NULL;
+static cl_mem g_tt = NULL, g_y = NULL, g_per = NULL, g_op = NULL, g_oj = NULL, g_ob = NULL, g_ms = NULL;
+static int g_maxbins = 1024;
 static size_t g_cap_n = 0, g_cap_chunk = 0;
 static const int kChunk = 4096;   // periods per launch: short launches stay far below any watchdog limit
 
 const char *gpu_device_name() { return g_name; }
 
 static void release_buffers() {
-    cl_mem *all[] = {&g_tt, &g_y, &g_per, &g_op, &g_oj, &g_ob};
+    cl_mem *all[] = {&g_tt, &g_y, &g_per, &g_op, &g_oj, &g_ob, &g_ms};
     for (cl_mem *m : all) {
         if (*m) cl_api.ReleaseMemObject(*m);
         *m = NULL;
@@ -113,7 +112,7 @@ static void release_buffers() {
     g_cap_n = g_cap_chunk = 0;
 }
 
-bool gpu_init(int device_id, std::string *err) {
+bool gpu_init(int device_id, int maxbins, std::string *err) {
     if (!cl_dynload_init()) { *err = "no OpenCL library found"; return false; }
     cl_uint np = 0;
     if (cl_api.GetPlatformIDs(0, NULL, &np) != CL_SUCCESS || np == 0) { *err = "no OpenCL platform"; return false; }
@@ -144,7 +143,11 @@ bool gpu_init(int device_id, std::string *err) {
     cl_api.GetDeviceInfo(g_dev, CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(max_wg), &max_wg, NULL);
     cl_ulong lmem = 0;
     cl_api.GetDeviceInfo(g_dev, CL_DEVICE_LOCAL_MEM_SIZE, sizeof(lmem), &lmem, NULL);
-    if (max_wg < 64 || lmem < 12 * 1024) { *err = "device has too little work-group size or local memory"; return false; }
+    if (maxbins < 256) maxbins = 256;
+    maxbins = (maxbins + 63) & ~63;
+    g_maxbins = maxbins;
+    // two int tables of maxbins plus the reduction arrays (64 * 12 bytes) and some slack for kernel arguments
+    if (max_wg < 64 || lmem < (cl_ulong)(8 * maxbins + 64 * 12 + 512)) { *err = "device has too little work-group size or local memory"; return false; }
     cl_int e = 0;
     g_ctx = cl_api.CreateContext(NULL, 1, &g_dev, NULL, NULL, &e);
     if (!g_ctx) { *err = "clCreateContext failed"; return false; }
@@ -154,7 +157,9 @@ bool gpu_init(int device_id, std::string *err) {
     size_t len = std::strlen(src);
     g_prog = cl_api.CreateProgramWithSource(g_ctx, 1, &src, &len, &e);
     if (!g_prog) { *err = "clCreateProgramWithSource failed"; return false; }
-    e = cl_api.BuildProgram(g_prog, 1, &g_dev, "-cl-std=CL1.2", NULL, NULL);
+    char opts[64];
+    std::snprintf(opts, sizeof(opts), "-cl-std=CL1.2 -DMAXB=%d", maxbins);
+    e = cl_api.BuildProgram(g_prog, 1, &g_dev, opts, NULL, NULL);
     if (e != CL_SUCCESS) {
         size_t ls = 0;
         cl_api.GetProgramBuildInfo(g_prog, g_dev, CL_PROGRAM_BUILD_LOG, 0, NULL, &ls);
@@ -171,7 +176,7 @@ bool gpu_init(int device_id, std::string *err) {
 bool gpu_scan(const Prep &p, const Params &P, const std::vector<double> &periods, ScanOut &o) {
     size_t n = p.t.size(), np = periods.size();
     if (!g_kernel || n == 0 || np == 0) return false;
-    if ((int)std::ceil(P.pmax / P.binw) > PL_MAXBINS) { std::fprintf(stderr, "planodia_opencl: pmax too large for the kernel's bin table\n"); return false; }
+    if ((int)std::ceil(P.pmax / P.binw) > g_maxbins || P.ndur > PL_MAXDUR) { std::fprintf(stderr, "planodia_opencl: pmax too large for the kernel's bin table\n"); return false; }
     cl_int e = 0;
     size_t chunk = (np < (size_t)kChunk) ? np : (size_t)kChunk;
     if (n > g_cap_n || chunk > g_cap_chunk) {
@@ -184,7 +189,8 @@ bool gpu_scan(const Prep &p, const Params &P, const std::vector<double> &periods
         g_op = cl_api.CreateBuffer(g_ctx, CL_MEM_READ_WRITE, g_cap_chunk * 4, NULL, &e);
         g_oj = cl_api.CreateBuffer(g_ctx, CL_MEM_READ_WRITE, g_cap_chunk * 4, NULL, &e);
         g_ob = cl_api.CreateBuffer(g_ctx, CL_MEM_READ_WRITE, g_cap_chunk * 4, NULL, &e);
-        if (!g_tt || !g_y || !g_per || !g_op || !g_oj || !g_ob) { std::fprintf(stderr, "planodia_opencl: buffer allocation failed\n"); release_buffers(); return false; }
+        g_ms = cl_api.CreateBuffer(g_ctx, CL_MEM_READ_ONLY, PL_MAXDUR * 4, NULL, &e);
+        if (!g_tt || !g_y || !g_per || !g_op || !g_oj || !g_ob || !g_ms) { std::fprintf(stderr, "planodia_opencl: buffer allocation failed\n"); release_buffers(); return false; }
     }
     std::vector<float> tf(n), yf(n), pf(chunk);
     for (size_t i = 0; i < n; i++) { tf[i] = (float)p.t[i]; yf[i] = (float)p.y[i]; }
@@ -194,8 +200,9 @@ bool gpu_scan(const Prep &p, const Params &P, const std::vector<double> &periods
     o.bj.assign(np, 0);
     o.bb.assign(np, 0);
     int ni = (int)n, nd = P.ndur;
-    int m[4] = {1, 1, 1, 1};
-    for (int j = 0; j < nd && j < 4; j++) m[j] = dur_bins(P, j);
+    int m[PL_MAXDUR];
+    for (int j = 0; j < PL_MAXDUR; j++) m[j] = j < nd ? dur_bins(P, j) : 1;
+    cl_api.EnqueueWriteBuffer(g_queue, g_ms, CL_TRUE, 0, PL_MAXDUR * 4, m, 0, NULL, NULL);
     float binw = (float)P.binw, sigma = (float)p.sigma;
     std::vector<float> opw(chunk);
     std::vector<int> oj(chunk), ob(chunk);
@@ -211,10 +218,7 @@ bool gpu_scan(const Prep &p, const Params &P, const std::vector<double> &periods
         cl_api.SetKernelArg(g_kernel, a++, sizeof(float), &binw);
         cl_api.SetKernelArg(g_kernel, a++, sizeof(float), &sigma);
         cl_api.SetKernelArg(g_kernel, a++, sizeof(int), &nd);
-        cl_api.SetKernelArg(g_kernel, a++, sizeof(int), &m[0]);
-        cl_api.SetKernelArg(g_kernel, a++, sizeof(int), &m[1]);
-        cl_api.SetKernelArg(g_kernel, a++, sizeof(int), &m[2]);
-        cl_api.SetKernelArg(g_kernel, a++, sizeof(int), &m[3]);
+        cl_api.SetKernelArg(g_kernel, a++, sizeof(cl_mem), &g_ms);
         cl_api.SetKernelArg(g_kernel, a++, sizeof(cl_mem), &g_op);
         cl_api.SetKernelArg(g_kernel, a++, sizeof(cl_mem), &g_oj);
         cl_api.SetKernelArg(g_kernel, a++, sizeof(cl_mem), &g_ob);

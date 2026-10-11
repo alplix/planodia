@@ -7,7 +7,8 @@
 
 namespace pl {
 // device_id: index within the matching platform (BOINC --device); returns false and fills *err on failure
-bool gpu_init(int device_id, std::string *err);
+// maxbins: the largest phase-bin table the kernel needs (pmax / binw rounded up); more bins need more local memory
+bool gpu_init(int device_id, int maxbins, std::string *err);
 // same contract as scan_cpu(); false on any OpenCL error
 bool gpu_scan(const Prep &p, const Params &P, const std::vector<double> &periods, ScanOut &o);
 void gpu_shutdown();
