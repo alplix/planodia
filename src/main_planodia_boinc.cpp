@@ -95,8 +95,7 @@ int main(int argc, char **argv) {
     {
         std::string err;
         if (!pl::gpu_init(device_id, &err)) { fprintf(stderr, "no usable GPU: %s\n", err.c_str()); boinc_finish(1); return 1; }
-        fprintf(stderr, "planodia_opencl: using OpenCL device \"%s\"
-", pl::gpu_device_name());
+        fprintf(stderr, "planodia_opencl: using OpenCL device \"%s\"\n", pl::gpu_device_name());
     }
 #else
     (void)device_id;
@@ -142,7 +141,7 @@ int main(int argc, char **argv) {
     } else {
         done = 0;
         fout = boinc_fopen(outp, "wb");
-        if (fout) fprintf(fout, "# planodia %s %ld light curves\n", PLANODIA_VERSION, total);
+        if (fout) fprintf(fout, "# planodia 1 %ld light curves\n", total);   // result FORMAT version 1 (not the app version)
     }
     if (!fout) { fprintf(stderr, "can't open output\n"); boinc_finish(1); return 1; }
     fflush(fout);
