@@ -21,3 +21,7 @@ strongest peak are masked and the scan repeated; the first pass reports its stro
 single strongest peak. On 80 sector-26 light curves with two injected planets (the second one half as deep) this recovers the second
 planet in 22 instead of 10 cases at the cost of three scans per light curve, which is what the GPU builds are for (about 0.1-0.2 s per
 light curve on an RTX 5070 Ti). A finer period grid or finer phase bins did not find more planets: they only raise the false-alarm rate.
+
+## License
+
+GNU General Public License v3.0 or later, see `LICENSE`.
