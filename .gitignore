@@ -1,2 +1,4 @@
 build/
 stage/
+__pycache__/
+*.py[cod]
