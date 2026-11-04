@@ -1,0 +1,12 @@
+# The everyday profile: format 1 with the search's default Params, 60 synthetic light curves at the 10-minute cadence of
+# the full-frame images the project ingests (sectors 27 to 55), about 3,700 points each, one shard. A third of the light
+# curves carry a box transit. Expected about 30 s on an Apple M1 (estimate: 0.5 s per light curve on one M1 core, PLA-005;
+# not measured with this suite). It exercises the whole CPU path in its usual proportions: the fold loop of scan_cpu() is
+# nearly all of it, the box scan, prepare() and finish() are small shares. Use it for every change to the scan, for a
+# build-flag comparison and as the first check that the output stays the same.
+# The parameters are the defaults of pl::Params (pmin 0.5 d, pmax 14 d, frequency factor 1.5, 1 day flattening); the values
+# the server really sends are not in this repository.
+# shard <light curves> <cadence in seconds> <seed>   (make_shards.py; the seed picks the light curves)
+shard 60 600 11
+in planodia 1
+in 0.5 14 1.5 1.0 1

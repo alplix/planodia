@@ -34,13 +34,15 @@ input light curve, in shard order. A light curve takes about 0.08 s on one CPU c
 | `tools/build_gpu_server.sh` | OpenCL apps: Linux x86_64 and Windows x86_64 per vendor (nvidia, amd, intel), Windows arm64 (qualcomm) |
 | `tools/build_mac.sh` | macOS arm64 and x86_64, CPU app and (with `OPENCL=1`) the Apple OpenCL app |
 | `tools/build_android.sh` | Android aarch64, CPU app and the Adreno OpenCL app |
+| `scripts/bench/` | speed A/B of `planodia_cli` builds (CPU, Apple OpenCL) on fixed synthetic work units (`mac_ab.sh` does it all on a Mac); `make_shards.py` writes the synthetic `SKT1` shards; method, expected hot spots and results in `docs/BENCHMARK.md` |
 | `docs/kb/` | knowledge base (below) |
 
 No vendored third-party code. The BOINC library and the OpenCL headers come from the build machines.
 
 ## Invariants (break one and results become silently wrong)
 
-- **Shard format `SKT1`**: one writer (`tools/ingest.py` `convert()`, `write_shard()`) and one reader (`src/skt.h`).
+- **Shard format `SKT1`**: one writer (`tools/ingest.py` `convert()`, `write_shard()`; the benchmark's synthetic
+  `scripts/bench/make_shards.py` must follow it) and one reader (`src/skt.h`).
   Header `SKT1`, u32 version 1, u32 n_lc, u32 sector; record u64 tic, f32 tmag, ra, dec, t0, dt, u32 n, n u16
   cadence offsets, n f16 flux, 2 bytes of padding when n is odd. Little endian. `ingest.py:104` packs a wrong order
   and is overwritten by line 106; only line 106 counts. `t0` is f32 (PLA-017).
@@ -136,8 +138,12 @@ There are none: no test directory, no stub BOINC library, no reference outputs. 
 - `main_planodia_boinc.cpp` (checkpoint, lifecycle, device choice): no harness exists. The knowledge-base patterns
   describe the stub BOINC library to build (PAT-001 "How to test"; kampylos has one in `tests/boinc_stub/`).
 - Build scripts: a change to flags can change results (PAT-018); compare CLI outputs of two builds.
+- A speed change: `scripts/bench/run_bench.sh` against the old build (`build_variant.sh` with `REF=`); claim a gain only
+  by the rule in `docs/BENCHMARK.md`, and show `same output` or say that the result lines change, which is a server
+  question (quorum 2, PLA-010).
 - Shards for tests: `tools/ingest.py` needs network access and its fixed data path. A small synthetic `SKT1` file
   can be written in a few lines of Python following `src/skt.h`; keep it outside the repository.
+  `scripts/bench/make_shards.py` writes such files (to `~/planodia-work/data`) for the benchmark.
 
 ## Environment notes
 
