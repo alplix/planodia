@@ -24,7 +24,7 @@ input light curve, in shard order. A light curve takes about 0.08 s on one CPU c
 | Path | What |
 |---|---|
 | `src/main_planodia_boinc.cpp` | the BOINC application (CPU, and GPU with `-DPL_OPENCL`): input parsing, checkpoint, `trim_output()`, main loop |
-| `src/planodia_core.h` | the search: `Params` (defaults), `prepare()`, `make_periods()`, `scan_cpu()` (double), `finish()` (noise floor, SDE, peaks), `search_passes()`, `format_result()`, `format_skipped()` |
+| `src/planodia_core.h` | the search: `Params` (defaults), `prepare()`, `make_periods()`, `scan_cpu()` (double; folds 4 trial periods per pass over the points, the box search per period in `scan_folded()`), `finish()` (noise floor, SDE, peaks), `search_passes()`, `format_result()`, `format_skipped()` |
 | `src/planodia_opencl.cpp`, `.h` | the OpenCL backend: kernel source (`kSource`), `gpu_init()` (platform and device choice), `gpu_scan()` (same contract as `scan_cpu`, in float) |
 | `src/cl_dynload.c`, `.h` | run-time OpenCL loader (dlopen / LoadLibrary, Android linker namespaces) and the vendor filters `cl_platform_matches_vendor()`, `cl_pick_vendor_device()`; a copy shared with other bitboinc apps (`docs/kb/kb.conf`). Its comments name files of other apps (`opencl_search.c`). |
 | `src/skt.h` | `ShardReader`: the only reader of the `SKT1` shard format |
@@ -34,13 +34,15 @@ input light curve, in shard order. A light curve takes about 0.08 s on one CPU c
 | `tools/build_gpu_server.sh` | OpenCL apps: Linux x86_64 and Windows x86_64 per vendor (nvidia, amd, intel), Windows arm64 (qualcomm) |
 | `tools/build_mac.sh` | macOS arm64 and x86_64, CPU app and (with `OPENCL=1`) the Apple OpenCL app |
 | `tools/build_android.sh` | Android aarch64, CPU app and the Adreno OpenCL app |
+| `scripts/bench/` | speed A/B of `planodia_cli` builds (CPU, Apple OpenCL) on fixed synthetic work units (`mac_ab.sh` does it all on a Mac, `linux_ab.sh` Linux in a container, `cross_check.sh` Windows and Linux x86_64 builds under emulation); `make_shards.py` writes the synthetic `SKT1` shards; method, measured hot spots and results in `docs/BENCHMARK.md` |
 | `docs/kb/` | knowledge base (below) |
 
 No vendored third-party code. The BOINC library and the OpenCL headers come from the build machines.
 
 ## Invariants (break one and results become silently wrong)
 
-- **Shard format `SKT1`**: one writer (`tools/ingest.py` `convert()`, `write_shard()`) and one reader (`src/skt.h`).
+- **Shard format `SKT1`**: one writer (`tools/ingest.py` `convert()`, `write_shard()`; the benchmark's synthetic
+  `scripts/bench/make_shards.py` must follow it) and one reader (`src/skt.h`).
   Header `SKT1`, u32 version 1, u32 n_lc, u32 sector; record u64 tic, f32 tmag, ra, dec, t0, dt, u32 n, n u16
   cadence offsets, n f16 flux, 2 bytes of padding when n is odd. Little endian. `ingest.py:104` packs a wrong order
   and is overwritten by line 106; only line 106 counts. `t0` is f32 (PLA-017).
@@ -136,8 +138,12 @@ There are none: no test directory, no stub BOINC library, no reference outputs. 
 - `main_planodia_boinc.cpp` (checkpoint, lifecycle, device choice): no harness exists. The knowledge-base patterns
   describe the stub BOINC library to build (PAT-001 "How to test"; kampylos has one in `tests/boinc_stub/`).
 - Build scripts: a change to flags can change results (PAT-018); compare CLI outputs of two builds.
+- A speed change: `scripts/bench/run_bench.sh` against the old build (`build_variant.sh` with `REF=`); claim a gain only
+  by the rule in `docs/BENCHMARK.md`, and show `same output` or say that the result lines change, which is a server
+  question (quorum 2, PLA-010).
 - Shards for tests: `tools/ingest.py` needs network access and its fixed data path. A small synthetic `SKT1` file
   can be written in a few lines of Python following `src/skt.h`; keep it outside the repository.
+  `scripts/bench/make_shards.py` writes such files (to `~/planodia-work/data`) for the benchmark.
 
 ## Environment notes
 
@@ -158,7 +164,8 @@ There are none: no test directory, no stub BOINC library, no reference outputs. 
   - Buffer writes, reads and kernel arguments are not checked, so a failed transfer silently reuses old data
     (PLA-015).
 - Apple Silicon OpenCL works (M1 on 2026-10-27: Apple platform with only the GPU device, 32 KB local memory, maximum
-  work-group size 256). The kernel is float only; no fp64 is needed anywhere.
+  work-group size 256). The kernel is float only; no fp64 is needed anywhere. On an M4 Pro (2026-11-04) the Apple
+  OpenCL scan was 5.5-9x faster than one CPU core (`docs/BENCHMARK.md`).
 - One OpenCL launch covers 4096 trial periods (`kChunk`, `planodia_opencl.cpp:102`): at most 36 ms per launch measured
   on an M1 even for a format-2 setting at the local-memory limit (ledger, PAT-016).
 - The CPU builds use libstdc++ (GCC, MinGW-w64 GCC) or libc++ (Apple clang, NDK, llvm-mingw); this matters for ties
