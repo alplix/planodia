@@ -1,0 +1,10 @@
+# Long light curves: format 1 with the default Params, 40 synthetic light curves at a 200-second cadence, about 11,000
+# points each (the later sectors; PLA-009 measured with the same size). Three times the points mean three
+# times the work in the fold loop and a running median window of 433 points instead of 145, so prepare() weighs about nine
+# times more than in `quick`; the per-period bin arrays stay as small. Expected about 1 minute on an Apple M1 (estimate from
+# the same 0.5 s per light curve at 3,700 points, not measured). Use it for changes to prepare(), for anything that
+# depends on the number of points (memory access, vectorisation) and to check that a gain in `quick` holds here.
+# shard <light curves> <cadence in seconds> <seed>
+shard 40 200 12
+in planodia 1
+in 0.5 14 1.5 1.0 1
