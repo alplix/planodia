@@ -44,3 +44,4 @@ When code that a row describes changes a lot, check the pattern again and update
 | PAT-031 | n/a | 2026-11-04 | 089cbd3 |  | no thread_local or __thread in src/ (git grep) |
 | PAT-032 | not-affected | 2026-11-04 | 089cbd3 |  | macOS sample of deep 2026-11-04: memmove and vector::assign about 1.5 % of the samples |
 | PAT-033 | affected | 2026-11-04 | 089cbd3 | PLA-023 | gpu_scan: blocking write, clFinish and reads per launch; prepare and finish not overlapped |
+| PAT-034 | n/a | 2026-11-10 | 3bedb36 |  | no work generator or work-unit template here (git grep rsc_fpops: no hits); the bound is set by the generator outside this repository |
