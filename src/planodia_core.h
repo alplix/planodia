@@ -115,62 +115,101 @@ struct ScanOut {
     std::vector<int> bj, bb;                  // best duration index and start bin per period
 };
 
+// The box search of one folded period: prefix sums over the bins, then every duration and start bin. cnt and sum are
+// the folded counts and sums (nb bins, overwritten with their prefix sums).
+inline void scan_folded(const Prep &p, const Params &P, double *cnt, double *sum, int nb, size_t k, ScanOut &o) {
+    double N = (double)p.t.size();
+    for (int b = 1; b < nb; b++) {            // inclusive prefix sums
+        cnt[b] += cnt[b - 1];
+        sum[b] += sum[b - 1];
+    }
+    double ctot = cnt[nb - 1], stot = sum[nb - 1];
+    double best = 0;
+    int bestj = 0, bestb = 0;
+    for (int j = 0; j < P.ndur; j++) {
+        int m = dur_bins(P, j);
+        for (int b = 0; b < nb; b++) {
+            int e = b + m - 1;
+            double cin, sin_;
+            double c0 = b > 0 ? cnt[b - 1] : 0.0, s0 = b > 0 ? sum[b - 1] : 0.0;
+            if (e < nb) {
+                cin = cnt[e] - c0;
+                sin_ = sum[e] - s0;
+            } else {
+                cin = (ctot - c0) + cnt[e - nb];
+                sin_ = (stot - s0) + sum[e - nb];
+            }
+            double cout = N - cin;
+            if (cin < 3 || cout < 10) continue;
+            double delta = (stot - sin_) / cout - sin_ / cin;   // out - in: positive for a dip
+            if (delta <= 0) continue;
+            double snr = delta / p.sigma * std::sqrt(cin * cout / N);
+            if (snr > best) {
+                best = snr;
+                bestj = j;
+                bestb = b;
+            }
+        }
+    }
+    o.power[k] = (float)best;
+    o.bj[k] = bestj;
+    o.bb[k] = bestb;
+}
+
 // CPU reference scan (double precision). The OpenCL kernel computes exactly the same thing in float.
+//
+// The fold takes SCAN_FOLD_PERIODS trial periods per pass over the points (2026-11-04, docs/BENCHMARK.md "Results").
+// With one period per pass, consecutive points mostly land in the same bin, so each `+=` waits for the store of the
+// one before it and the loop runs at the speed of that chain, not of the arithmetic. The bins of different periods are
+// independent chains that the CPU overlaps. Each bin still receives its points in index order and each period is
+// folded with the same expressions, so every count, sum and result is bit-identical to one period per pass.
+constexpr size_t SCAN_FOLD_PERIODS = 4;
+
 inline void scan_cpu(const Prep &p, const Params &P, const std::vector<double> &periods, ScanOut &o) {
     size_t np = periods.size(), n = p.t.size();
     o.power.assign(np, 0.f);
     o.bj.assign(np, 0);
     o.bb.assign(np, 0);
-    std::vector<double> cnt, sum;
-    double N = (double)n;
-    for (size_t k = 0; k < np; k++) {
-        double per = periods[k];
-        int nb = (int)std::ceil(per / P.binw);
-        cnt.assign(nb, 0.0);
-        sum.assign(nb, 0.0);
-        for (size_t i = 0; i < n; i++) {
-            double ph = p.t[i] / per;
-            ph -= std::floor(ph);
-            int b = (int)(ph * nb);
-            if (b >= nb) b = nb - 1;
-            cnt[b] += 1.0;
-            sum[b] += p.y[i];
+    std::vector<double> cnt[SCAN_FOLD_PERIODS], sum[SCAN_FOLD_PERIODS];
+    const double *t = p.t.data(), *y = p.y.data();
+    for (size_t k0 = 0; k0 < np; k0 += SCAN_FOLD_PERIODS) {
+        size_t kn = np - k0 < SCAN_FOLD_PERIODS ? np - k0 : SCAN_FOLD_PERIODS;
+        double per[SCAN_FOLD_PERIODS];
+        int nb[SCAN_FOLD_PERIODS];
+        double *c[SCAN_FOLD_PERIODS], *s[SCAN_FOLD_PERIODS];
+        for (size_t q = 0; q < kn; q++) {
+            per[q] = periods[k0 + q];
+            nb[q] = (int)std::ceil(per[q] / P.binw);
+            cnt[q].assign(nb[q], 0.0);
+            sum[q].assign(nb[q], 0.0);
+            c[q] = cnt[q].data();
+            s[q] = sum[q].data();
         }
-        for (int b = 1; b < nb; b++) {            // inclusive prefix sums
-            cnt[b] += cnt[b - 1];
-            sum[b] += sum[b - 1];
-        }
-        double ctot = cnt[nb - 1], stot = sum[nb - 1];
-        double best = 0;
-        int bestj = 0, bestb = 0;
-        for (int j = 0; j < P.ndur; j++) {
-            int m = dur_bins(P, j);
-            for (int b = 0; b < nb; b++) {
-                int e = b + m - 1;
-                double cin, sin_;
-                double c0 = b > 0 ? cnt[b - 1] : 0.0, s0 = b > 0 ? sum[b - 1] : 0.0;
-                if (e < nb) {
-                    cin = cnt[e] - c0;
-                    sin_ = sum[e] - s0;
-                } else {
-                    cin = (ctot - c0) + cnt[e - nb];
-                    sin_ = (stot - s0) + sum[e - nb];
+        if (kn == SCAN_FOLD_PERIODS) {
+            for (size_t i = 0; i < n; i++) {
+                double ti = t[i], yi = y[i];
+                for (size_t q = 0; q < SCAN_FOLD_PERIODS; q++) {
+                    double ph = ti / per[q];
+                    ph -= std::floor(ph);
+                    int b = (int)(ph * nb[q]);
+                    if (b >= nb[q]) b = nb[q] - 1;
+                    c[q][b] += 1.0;
+                    s[q][b] += yi;
                 }
-                double cout = N - cin;
-                if (cin < 3 || cout < 10) continue;
-                double delta = (stot - sin_) / cout - sin_ / cin;   // out - in: positive for a dip
-                if (delta <= 0) continue;
-                double snr = delta / p.sigma * std::sqrt(cin * cout / N);
-                if (snr > best) {
-                    best = snr;
-                    bestj = j;
-                    bestb = b;
+            }
+        } else {
+            for (size_t q = 0; q < kn; q++) {    // the last few periods, one pass each
+                for (size_t i = 0; i < n; i++) {
+                    double ph = t[i] / per[q];
+                    ph -= std::floor(ph);
+                    int b = (int)(ph * nb[q]);
+                    if (b >= nb[q]) b = nb[q] - 1;
+                    c[q][b] += 1.0;
+                    s[q][b] += y[i];
                 }
             }
         }
-        o.power[k] = (float)best;
-        o.bj[k] = bestj;
-        o.bb[k] = bestb;
+        for (size_t q = 0; q < kn; q++) scan_folded(p, P, c[q], s[q], nb[q], k0 + q, o);
     }
 }
 

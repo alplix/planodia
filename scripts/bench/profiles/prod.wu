@@ -1,0 +1,10 @@
+# The production-like long profile: what a task of format 1 is made of, two full shards of 250 light curves (the shard size
+# of tools/ingest.py) at the 10-minute cadence, the default Params. Expected about 4 minutes per run on an Apple M1
+# (estimate: 500 light curves at 0.5 s, not measured), so 3 rounds of two or three builds take over half an hour. Use it
+# for the final number of a change, after `quick` and `dense` agree, not for exploring. How many shards one work unit
+# carries is a server setting that is not in this repository; the shard count here only sets the length of the run.
+# shard <light curves> <cadence in seconds> <seed>
+shard 250 600 21
+shard 250 600 22
+in planodia 1
+in 0.5 14 1.5 1.0 2

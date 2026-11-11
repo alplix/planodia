@@ -41,3 +41,7 @@ When code that a row describes changes a lot, check the pattern again and update
 | PAT-028 | not-affected | 2026-10-27 | 3f6c1b7 |  | guards: PL_OPENCL (main:23-31, 127, 180) and EXPECTED_GPU_VENDOR (planodia_opencl.cpp:12-14, default empty = no vendor filter); all four scripts pass -DPL_OPENCL -DCL_TARGET_OPENCL_VERSION=120 -DEXPECTED_GPU_VENDOR to every OpenCL object; CPU builds omit PL_OPENCL by design |
 | PAT-029 | affected | 2026-10-27 | 3f6c1b7 | PLA-021 | build_gpu_server.sh:36 ubuntu:20.04 by tag, :19 apt-get packages unversioned (compiler, static libstdc++, OpenCL headers end up in the Linux binaries) |
 | PAT-030 | n/a | 2026-10-27 | 3f6c1b7 |  | no boinc_temporary_exit() and no deliberate exit without boinc_finish() in src/ (git grep) |
+| PAT-031 | n/a | 2026-11-04 | 089cbd3 |  | no thread_local or __thread in src/ (git grep) |
+| PAT-032 | not-affected | 2026-11-04 | 089cbd3 |  | macOS sample of deep 2026-11-04: memmove and vector::assign about 1.5 % of the samples |
+| PAT-033 | affected | 2026-11-04 | 089cbd3 | PLA-023 | gpu_scan: blocking write, clFinish and reads per launch; prepare and finish not overlapped |
+| PAT-034 | n/a | 2026-11-10 | 3bedb36 |  | no work generator or work-unit template here (git grep rsc_fpops: no hits); the bound is set by the generator outside this repository |

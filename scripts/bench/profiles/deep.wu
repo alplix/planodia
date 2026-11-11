@@ -1,0 +1,14 @@
+# Planodia Deep: input format 2 with three passes (the transits of the strongest peak are masked and the scan is repeated,
+# src/planodia_core.h search_passes()), finer phase bins (0.01 d) and six box durations, 16 synthetic light curves at the
+# 10-minute cadence. Each light curve is scanned three times over a period grid of about 32,000 periods, so finish(),
+# mask_transits() and the box scan weigh more than in `quick` (6 durations instead of 4, twice the bins). Expected 40 to
+# 60 s on an Apple M1 (estimate: 1.3 s for three passes of the default grid, PLA-005, plus the finer bins; not measured).
+# Use it for changes to finish(), to the box scan, to anything that runs once per pass, and for the OpenCL kernel at
+# 1,400 bins (the kernel's local memory need is 8 bytes per bin, PLA-016).
+# These Deep parameters are an assumption that keeps within the app's range checks (main_planodia_boinc.cpp); the server's
+# real Deep parameters are not in this repository, so adjust them here when they are known.
+# shard <light curves> <cadence in seconds> <seed>
+shard 16 600 13
+in planodia 2
+in 0.5 14 1.5 1.0 1
+in 0.01 6 0.03 0.06 0.10 0.16 0.25 0.40 80000 3 301
